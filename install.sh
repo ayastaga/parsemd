@@ -7,7 +7,6 @@
 set -euo pipefail
 
 REPO="ayastaga/claude-markitdown"
-SETTINGS="$HOME/.claude/settings.json"
 
 RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'; NC='\033[0m'
 info()    { echo -e "${GREEN}[claude-markitdown]${NC} $*"; }
@@ -18,6 +17,11 @@ error()   { echo -e "${RED}[claude-markitdown]${NC} $*" >&2; }
 
 if ! command -v node &>/dev/null; then
   error "Node.js not found. Install from https://nodejs.org and re-run."
+  exit 1
+fi
+
+if ! command -v claude &>/dev/null; then
+  error "Claude Code CLI not found. Install from https://claude.ai/code and re-run."
   exit 1
 fi
 
@@ -39,40 +43,26 @@ fi
 
 info "markitdown $(markitdown --version 2>/dev/null || echo 'found') — OK"
 
-# ── Patch settings.json ──────────────────────────────────────────────────────
+# ── Register marketplace + install plugin via Claude Code CLI ─────────────────
+# Using `claude plugin` commands instead of patching settings.json directly so
+# that Claude Code resolves its own config path — works correctly inside dev
+# containers, Docker, and other environments where $HOME may differ from the
+# Claude Code host config location.
 
-if [[ ! -f "$SETTINGS" ]]; then
-  mkdir -p "$(dirname "$SETTINGS")"
-  echo '{}' > "$SETTINGS"
-fi
+MARKETPLACE_KEY="${REPO##*/}"  # claude-markitdown
+PLUGIN_KEY="${MARKETPLACE_KEY}@${MARKETPLACE_KEY}"
 
-python3 - "$SETTINGS" "$REPO" <<'PYEOF'
-import json, sys, pathlib
+info "Registering marketplace '${MARKETPLACE_KEY}'..."
+claude plugin marketplace add "github:${REPO}" 2>/dev/null \
+  && info "Marketplace registered." \
+  || warn "Marketplace already registered or failed — continuing."
 
-settings_path = pathlib.Path(sys.argv[1])
-repo = sys.argv[2]
+info "Installing plugin '${PLUGIN_KEY}'..."
+claude plugin install "${PLUGIN_KEY}" \
+  && info "Plugin installed." \
+  || { error "Plugin install failed. Run: claude plugin install ${PLUGIN_KEY}"; exit 1; }
 
-with open(settings_path) as f:
-    settings = json.load(f)
-
-# Extract marketplace key from repo slug (part after /)
-marketplace_key = repo.split('/')[-1]
-plugin_key = f"{marketplace_key}@{marketplace_key}"
-
-settings.setdefault('extraKnownMarketplaces', {})[marketplace_key] = {
-    'source': {'source': 'github', 'repo': repo}
-}
-settings.setdefault('enabledPlugins', {})[plugin_key] = True
-
-with open(settings_path, 'w') as f:
-    json.dump(settings, f, indent=2)
-    f.write('\n')
-
-print(f"Registered marketplace '{marketplace_key}' and enabled plugin '{plugin_key}'")
-PYEOF
-
-info "Patched $SETTINGS"
-info "Done. Restart Claude Code for the hook to take effect."
+info "Done. Restart Claude Code for the plugin to take effect."
 info ""
 info "Usage:"
 info "  /parse ~/path/to/file.pdf             — inject into context"
