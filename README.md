@@ -1,7 +1,7 @@
 <h1 align="center">parsemd</h1>
 
 <p align="center">
-  <strong>parse binary docs into Claude context with /parsemd</strong>
+  <strong>parse binary docs to md for Claude context with /parsemd</strong>
 </p>
 
 <p align="center">
