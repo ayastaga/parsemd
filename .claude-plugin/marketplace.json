@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "parsemd",
+  "description": "Parse binary docs (DOCX, PDF, PPTX, XLSX, images, audio) into markdown and inject as context for Claude Code.",
+  "owner": {
+    "name": "agastya-intercept",
+    "url": "https://github.com/agastya-intercept"
+  },
+  "plugins": [
+    {
+      "name": "parsemd",
+      "description": "Parse binary docs (DOCX, PDF, PPTX, XLSX, images, audio) into markdown and inject as context. Powered by Microsoft's markitdown.",
+      "source": "./",
+      "category": "productivity"
+    }
+  ]
+}
