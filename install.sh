@@ -111,7 +111,7 @@ EOF
 else
   # Plugin install: namespaced /parsemd:parsemd
   info "Registering marketplace '${MARKETPLACE_NAME}'..."
-  claude plugin marketplace add "github:${REPO}" 2>/dev/null \
+  claude plugin marketplace add "${REPO}" 2>/dev/null \
     && info "Marketplace registered." \
     || warn "Marketplace already registered or failed — continuing."
 
