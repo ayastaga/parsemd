@@ -1,21 +1,25 @@
+<p align="center">
+  <img src="https://em-content.zobj.net/source/apple/391/page-facing-up_1f4c4.png" width="120" />
+</p>
+
 <h1 align="center">parsemd</h1>
 
 <p align="center">
-  <strong>parse binary docs to md for Claude context with /parsemd</strong>
+  <strong>parse binary docs into Claude context with /parsemd</strong>
 </p>
 
 <p align="center">
   <a href="https://github.com/ayastaga/parsemd/stargazers"><img src="https://img.shields.io/github/stars/ayastaga/parsemd?style=flat&color=yellow" alt="Stars"></a>
   <a href="https://github.com/ayastaga/parsemd/commits/main"><img src="https://img.shields.io/github/last-commit/ayastaga/parsemd?style=flat" alt="Last Commit"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/ayastaga/parsemd?style=flat" alt="License"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat" alt="License"></a>
 </p>
 
 <p align="center">
   <a href="#what-it-does">What It Does</a> •
+  <a href="#how-it-works">How It Works</a> •
   <a href="#install">Install</a> •
   <a href="#usage">Usage</a> •
-  <a href="#supported-formats">Formats</a> •
-  <a href="#how-it-works">How It Works</a>
+  <a href="#supported-formats">Formats</a>
 </p>
 
 ---
@@ -35,6 +39,25 @@ That's it. Claude can now read, summarize, reference, and reason about the docum
 **Why it exists:** Binary formats are completely opaque to Claude. Without this plugin, you'd need to manually convert every PDF or DOCX before Claude could help with it. parsemd automates that conversion invisibly, before Claude even sees your message.
 
 Powered by Microsoft's [markitdown](https://github.com/microsoft/markitdown).
+
+## How It Works
+
+When you send a message with `/parsemd`, this happens before Claude ever sees it:
+
+1. A background hook intercepts the message
+2. It finds the file path in your message
+3. Converts the file to markdown using `markitdown`
+4. Injects that markdown into Claude's context invisibly
+
+Claude then receives your original message plus the full document content — as if you'd pasted it in manually.
+
+You'll see a confirmation line:
+
+```
+Parsed: report.pdf → markdown (4,231 chars). Injected into context.
+```
+
+The hook only runs when your message contains `/parse`, so there's no overhead on regular messages.
 
 ---
 
@@ -213,27 +236,6 @@ No `/parsemd` in the message → nothing happens. Claude sees the message as-is.
 | Web / Data | `.html` `.csv` `.json`                                |
 
 Plain text files (`.txt`, `.md`, `.py`, etc.) don't need this plugin — use Claude Code's built-in `@` directly.
-
----
-
-## How It Works
-
-When you send a message with `/parsemd`, this happens before Claude ever sees it:
-
-1. A background hook intercepts the message
-2. It finds the file path in your message
-3. Converts the file to markdown using `markitdown`
-4. Injects that markdown into Claude's context invisibly
-
-Claude then receives your original message plus the full document content — as if you'd pasted it in manually.
-
-You'll see a confirmation line:
-
-```
-Parsed: report.pdf → markdown (4,231 chars). Injected into context.
-```
-
-The hook only runs when your message contains `/parse`, so there's no overhead on regular messages.
 
 ---
 
