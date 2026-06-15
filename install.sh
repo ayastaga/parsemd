@@ -69,14 +69,14 @@ if [[ "$STANDALONE" == true ]]; then
   if [[ -n "${BASH_SOURCE[0]:-}" && "${BASH_SOURCE[0]}" != "bash" ]]; then
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || true
   fi
-  HOOK_SRC="${SCRIPT_DIR}/hooks/markitdown-hook.js"
+  HOOK_SRC="${SCRIPT_DIR}/hooks/parsemd-hook.js"
 
   if [[ -n "$SCRIPT_DIR" && -f "$HOOK_SRC" ]]; then
     info "Symlinking hook from repo (updates apply automatically)..."
     ln -sf "$HOOK_SRC" "${HOOK_DIR}/parsemd-hook.js"
   else
     info "Downloading hook script..."
-    curl -fsSL "${RAW}/hooks/markitdown-hook.js" -o "${HOOK_DIR}/parsemd-hook.js"
+    curl -fsSL "${RAW}/hooks/parsemd-hook.js" -o "${HOOK_DIR}/parsemd-hook.js"
     warn "Snapshot installed. Re-run ./install.sh --standalone from a cloned repo for auto-updates."
   fi
 
