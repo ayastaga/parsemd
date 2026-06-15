@@ -2,8 +2,8 @@
   "name": "claude-markitdown",
   "description": "Parse binary docs (DOCX, PDF, PPTX, XLSX, images, audio) into markdown and inject as context via /parse. Powered by Microsoft's markitdown.",
   "author": {
-    "name": "agastya-intercept",
-    "url": "https://github.com/agastya-intercept"
+    "name": "ayastaga",
+    "url": "https://github.com/ayastaga"
   },
   "hooks": {
     "UserPromptSubmit": [
