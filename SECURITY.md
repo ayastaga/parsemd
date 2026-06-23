@@ -2,13 +2,14 @@
 
 ## Threat Model
 
-parsemd runs locally inside your Claude Code session. Its job is to convert binary documents into markdown via the `markitdown` library and inject the result into a Claude conversation. It does not open network sockets, does not exfiltrate data, and does not require credentials.
+parsemd runs locally inside your Claude Code session. Its job is to convert binary documents into markdown via the `markitdown` library and inject the result into a Claude conversation. It does not open network sockets (except for explicit URL downloads — see below), does not exfiltrate data, and does not require credentials.
 
 The relevant threats are:
 
 1. A malicious file path is passed via `/parsemd`.
 2. A malicious file is parsed by `markitdown`, exploiting a parser vulnerability.
 3. A document's contents include text that looks like a `/parsemd` command (prompt injection).
+4. A malicious URL is passed, leading to unexpected network activity or content.
 
 ## What Is Guarded
 
@@ -21,6 +22,8 @@ The relevant threats are:
 - **Restricted environment.** The subprocess receives only `PATH`, `HOME`, and `LANG`. Other environment variables (including secrets) are not propagated.
 - **Output size cap.** Subprocess stdout is capped at 32 MiB. Larger output produces an `OUTPUT_TOO_LARGE` error rather than memory exhaustion.
 - **Total context cap.** The hook caps total injected content per prompt at 250 000 characters across all files, proportionally truncating individual files when the total is exceeded.
+- **URL download limits.** When a URL is passed instead of a local path, the download is subject to: 30-second timeout, 100 MiB maximum size, and at most 5 HTTP redirects. The temp file is deleted immediately after conversion. No cookies or authentication tokens are sent. Only `http:` and `https:` schemes are accepted.
+- **Provenance.** Every injection is prepended with a `[parsemd]` header recording the source path, engine version, SHA256 hash (truncated to 16 hex chars), and conversion timestamp. This helps audit which content came from parsemd and from which file.
 
 ## What Is Not Guarded (and why)
 

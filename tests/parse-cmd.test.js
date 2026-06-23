@@ -83,3 +83,15 @@ test('strips fenced block but keeps surrounding commands', () => {
   assert.match(out[0].filePath, /a\.pdf$/);
   assert.match(out[1].filePath, /c\.pdf$/);
 });
+
+test('matches http URL ending in known extension', () => {
+  const out = extractParseCommands('/parsemd http://example.com/report.pdf');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].filePath, 'http://example.com/report.pdf');
+});
+
+test('matches https URL with .docx tail', () => {
+  const out = extractParseCommands('/parsemd https://cdn.example.com/files/doc.docx');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].filePath, 'https://cdn.example.com/files/doc.docx');
+});

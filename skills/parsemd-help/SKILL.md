@@ -33,6 +33,7 @@ Display this reference card. One-shot — output only, do not persist anything.
 /parsemd ~/docs/report.pdf
 /parsemd @"~/My Docs/Q4 Report.pdf"
 /parsemd /tmp/export.docx
+/parsemd https://example.com/report.pdf
 ```
 
 ## Supported Formats
@@ -54,6 +55,7 @@ Text files (`.txt`, `.md`, `.py`, etc.) — use `@` directly.
 /parsemd-save ~/docs/notes.docx
 /parsemd a.pdf compare with /parsemd b.docx
 /parsemd report.pdf --no-cache
+/parsemd https://example.com/report.pdf
 ```
 
 Docs: https://github.com/ayastaga/parsemd

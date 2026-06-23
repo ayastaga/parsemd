@@ -60,3 +60,39 @@ test('gcStale removes only old parsemd-cache files', () => {
     for (const f of [oldFile, newFile, unrelated]) try { fs.unlinkSync(f); } catch (_) {}
   }
 });
+
+test('hashKey returns 64-hex sha256', () => {
+  const fp = path.join(os.tmpdir(), `parsemd-hashkey-${process.pid}.txt`);
+  fs.writeFileSync(fp, 'hello world');
+  try {
+    const h = cache.hashKey(fp);
+    assert.match(h, /^[a-f0-9]{64}$/);
+  } finally {
+    try { fs.unlinkSync(fp); } catch (_) {}
+  }
+});
+
+test('project cache write/read round-trips and creates .gitignore', () => {
+  const tmpDir = path.join(os.tmpdir(), `parsemd-pcache-test-${process.pid}`);
+  fs.mkdirSync(tmpDir, { recursive: true });
+  try {
+    const sha = 'a'.repeat(64);
+    cache.writeProjectCache(tmpDir, sha, '# Hello\n\nWorld');
+    const got = cache.readProjectCache(tmpDir, sha);
+    assert.equal(got, '# Hello\n\nWorld');
+    const gi = fs.readFileSync(path.join(tmpDir, '.parsemd', '.gitignore'), 'utf8');
+    assert.ok(gi.includes('cache/'));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('readProjectCache misses return null', () => {
+  const tmpDir = path.join(os.tmpdir(), `parsemd-pcache-miss-${process.pid}`);
+  fs.mkdirSync(tmpDir, { recursive: true });
+  try {
+    assert.equal(cache.readProjectCache(tmpDir, 'b'.repeat(64)), null);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

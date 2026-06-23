@@ -5,6 +5,7 @@ const os = require('os');
 
 function expandPath(fp) {
   if (!fp) return fp;
+  if (/^https?:\/\//i.test(fp)) return fp;
   const clean = fp.replace(/^@/, '');
   if (clean.startsWith('~/')) return path.join(os.homedir(), clean.slice(2));
   if (clean === '~') return os.homedir();

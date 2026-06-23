@@ -44,14 +44,17 @@ Powered by Microsoft's [markitdown](https://github.com/microsoft/markitdown).
 When you send a message containing `/parsemd <file>`, this happens before Claude ever sees it:
 
 1. A `UserPromptSubmit` hook scans your prompt (skipping fenced code blocks and inline backticks) for `/parse*` invocations.
-2. For each file, `markitdown` is invoked as a sandboxed subprocess (macOS `sandbox-exec`, Linux `bwrap`/`firejail` where available) with network denied. The subprocess has a 5-minute timeout.
-3. Image files are routed directly to Claude's native vision via the `Read` tool — markitdown is not invoked for images.
-4. The combined markdown is cached (per-session in `$TMPDIR`) and injected into Claude's context, capped at 250 000 characters total across all files in the prompt.
+2. If the path is an HTTP(S) URL, the file is downloaded to a temp location (30s timeout, 100 MiB limit, 5 redirect max). The temp file is deleted after conversion.
+3. For each file, `markitdown` is invoked as a sandboxed subprocess (macOS `sandbox-exec`, Linux `bwrap`/`firejail` where available) with network denied. The subprocess has a 5-minute timeout.
+4. The resulting markdown is annotated with page/slide/sheet anchors (`<!-- page:N -->`, `<!-- slide:N -->`, `<!-- sheet:Name -->`) for structured formats.
+5. A `[parsemd]` provenance header is prepended, recording the source path, engine version, SHA256 hash, timestamp, and page/slide/sheet count.
+6. Image files are routed directly to Claude's native vision via the `Read` tool — markitdown is not invoked for images.
+7. The combined markdown is cached (per-session in `$TMPDIR`, or opt-in per-project at `<cwd>/.parsemd/cache/`) and injected into Claude's context, capped at 250 000 characters total across all files in the prompt.
 
-You see a one-line summary:
+You see a one-line summary with a first-heading preview:
 
 ```
-Parsed: report.pdf → markdown (4,231 chars). Injected into context.
+Parsed: report.pdf → markdown (4,231 chars, 12 pages) "Quarterly Revenue Analysis". Injected into context.
 ```
 
 The hook only runs on prompts containing a `/parse*` token; regular messages have no overhead.
@@ -111,7 +114,7 @@ pip install 'markitdown[all]'
 
 ```bash
 mkdir -p ~/.claude/hooks/parsemd ~/.claude/hooks/parsemd/lib
-for f in parsemd-hook.js lib/util.js lib/sandbox.js lib/engine.js lib/cache.js lib/parse-cmd.js; do
+for f in parsemd-hook.js lib/util.js lib/sandbox.js lib/engine.js lib/cache.js lib/parse-cmd.js lib/settings.js lib/url.js lib/provenance.js lib/anchors.js; do
   curl -fsSL "https://raw.githubusercontent.com/ayastaga/parsemd/main/hooks/$f" \
     -o "$HOME/.claude/hooks/parsemd/$f"
 done
@@ -188,6 +191,17 @@ Absolute path:
 /parsemd /tmp/export.docx
 ```
 
+### Parse from a URL
+
+Pass an HTTP or HTTPS URL directly. The file is downloaded to a temp location, converted, and the temp file is deleted:
+
+```
+/parsemd https://example.com/report.pdf
+/parsemd https://arxiv.org/pdf/2401.12345.pdf
+```
+
+The URL must end in a recognized file extension, or the server must return a recognized Content-Type header. Download is limited to 100 MiB with a 30-second timeout and at most 5 redirects.
+
 ### Save the converted markdown
 
 Save to current working directory:
@@ -209,6 +223,22 @@ Save to a specific path (works with both `/parsemd` and `/parsemd-save`):
 ```
 
 This skips both the read and the write of the on-disk session cache.
+
+### Project-local cache (opt-in)
+
+By default, parsemd caches conversions per-session in `$TMPDIR`. You can opt in to a project-local cache that persists across sessions and is keyed by file SHA256. Enable it in `~/.claude/settings.json`:
+
+```json
+{
+  "plugins": {
+    "parsemd": {
+      "projectCache": true
+    }
+  }
+}
+```
+
+When enabled, cached markdown is stored at `<cwd>/.parsemd/cache/<sha256>.md`. A `.gitignore` is created automatically inside `.parsemd/` to keep cache files out of version control. The project cache is checked after the session cache, so if both contain a hit, the session cache wins.
 
 ### Multiple files at once
 
@@ -270,7 +300,7 @@ Plain text files (`.txt`, `.md`, `.py`, etc.) don't need this plugin — use Cla
 
 **Images route through your in-session Claude — no API keys required.** When you `/parsemd photo.png`, parsemd does not invoke markitdown. Instead it instructs Claude to open the image via the native `Read` tool, which uses Claude's own vision. You do not need `MARKITDOWN_LLM_CLIENT`, `OPENAI_API_KEY`, or any other credential.
 
-**Audio is not yet routed through Claude.** As of version 1.1, audio files (`.wav`, `.mp3`, `.m4a`) still fall back to markitdown's transcription path. parsemd does not configure an LLM client for you. If markitdown produces no text, parsemd surfaces an `AUDIO_NOT_SUPPORTED` error. In-session-Claude audio routing is planned for Phase 4 — until then, transcribe externally (e.g. with a local Whisper build) and `/parsemd` the resulting `.txt`.
+**Audio is not yet routed through Claude.** As of version 1.2, audio files (`.wav`, `.mp3`, `.m4a`) still fall back to markitdown's transcription path. parsemd does not configure an LLM client for you. If markitdown produces no text, parsemd surfaces an `AUDIO_NOT_SUPPORTED` error. In-session-Claude audio routing is planned for Phase 4 — until then, transcribe externally (e.g. with a local Whisper build) and `/parsemd` the resulting `.txt`.
 
 ---
 
@@ -278,7 +308,9 @@ Plain text files (`.txt`, `.md`, `.py`, etc.) don't need this plugin — use Cla
 
 - Markitdown is run as a **sandboxed subprocess** (macOS `sandbox-exec`, Linux `bwrap`/`firejail`) with network denied. Disable with `PARSEMD_SANDBOX=off`.
 - The hook caps total injected content per prompt at **250 000 characters** across all files.
-- Cache is on-disk at `$TMPDIR/parsemd-cache-<session>.json`. See [`PRIVACY.md`](PRIVACY.md).
+- A `[parsemd]` **provenance header** is prepended to every injection, recording source path, engine version, SHA256 hash, and timestamp.
+- URL downloads are limited to **100 MiB**, **30 seconds**, and **5 redirects**. Temp files are deleted after conversion.
+- Cache is on-disk at `$TMPDIR/parsemd-cache-<session>.json`. Opt-in project cache at `<cwd>/.parsemd/cache/`. See [`PRIVACY.md`](PRIVACY.md).
 - Path traversal is intentionally not guarded. See [`SECURITY.md`](SECURITY.md).
 
 ---
@@ -287,8 +319,8 @@ Plain text files (`.txt`, `.md`, `.py`, etc.) don't need this plugin — use Cla
 
 parsemd is evolving from a file-conversion utility into a document context-engineering layer. Each phase is additive — no existing commands are removed or renamed.
 
-- **1.1 (current)** — sandboxed parser, categorized errors, 5-min timeout, on-disk session cache with 24h GC, tightened matcher (skips code blocks), `--no-cache` flag, total-context budget, image routing through in-session Claude.
-- **1.2 (planned)** — `[parsemd]` provenance header on every injection, page/slide/sheet anchors (`<!-- page:N -->` etc.), HTTP(S) URL input, opt-in project-local cache at `<cwd>/.parsemd/cache/` (SHA256-keyed, auto-`.gitignore`), first-heading preview in summary line, engine seam (`markitdown` default).
+- **1.1 (done)** — sandboxed parser, categorized errors, 5-min timeout, on-disk session cache with 24h GC, tightened matcher (skips code blocks), `--no-cache` flag, total-context budget, image routing through in-session Claude.
+- **1.2 (current)** — `[parsemd]` provenance header on every injection, page/slide/sheet anchors (`<!-- page:N -->` etc.), HTTP(S) URL input, opt-in project-local cache at `<cwd>/.parsemd/cache/` (SHA256-keyed, auto-`.gitignore`), first-heading preview in summary line, engine version detect, engine seam (`markitdown` default).
 - **1.3 (planned)** — slicing (`--pages`, `--section`, `--heading`, `--sheet`, `--head`, `--tail`), token budgeting (`--budget 20k`), `/parsemd-summarize` (Claude compacts maximally), `/parsemd-diff` (Claude compares two docs with citations).
 - **1.4 (planned)** — folder ingestion (`/parsemd-folder`), knowledge packs (`/parsemd-pack`), incremental updates, semantic extraction via in-session Claude (`/parsemd-relevant`), audio routing through in-session Claude.
 

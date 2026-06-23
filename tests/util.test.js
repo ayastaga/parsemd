@@ -43,3 +43,11 @@ test('ParseError carries code + detail', () => {
   assert.equal(e.message, 'bar');
   assert.equal(e.detail, 'detail');
 });
+
+test('expandPath leaves http URLs untouched', () => {
+  assert.equal(expandPath('http://example.com/report.pdf'), 'http://example.com/report.pdf');
+});
+
+test('expandPath leaves https URLs untouched', () => {
+  assert.equal(expandPath('https://cdn.example.com/doc.docx'), 'https://cdn.example.com/doc.docx');
+});

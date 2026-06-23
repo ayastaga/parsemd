@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { runSandboxed } = require('./sandbox');
 const { ParseError } = require('./util');
@@ -18,6 +19,24 @@ const SUPPORTED_EXTENSIONS = new Set([
   '.wav', '.mp3', '.m4a',
   '.html', '.csv', '.json',
 ]);
+
+let _versionPromise = null;
+
+function getVersion() {
+  if (_versionPromise) return _versionPromise;
+  _versionPromise = runSandboxed('markitdown', ['--version'], {
+    cwd: os.tmpdir(),
+    timeout: 5000,
+    maxBuffer: 4096,
+    inputDir: os.tmpdir(),
+  })
+    .then(r => {
+      const m = (r.stdout || '').match(/(\d+\.\d+\.\d+)/);
+      return m ? m[1] : null;
+    })
+    .catch(() => null);
+  return _versionPromise;
+}
 
 async function convert(filePath, opts = {}) {
   const ext = path.extname(filePath).toLowerCase();
@@ -84,4 +103,4 @@ async function convert(filePath, opts = {}) {
   };
 }
 
-module.exports = { convert, SUPPORTED_EXTENSIONS, IMAGE_EXTS, AUDIO_EXTS, PER_FILE_TIMEOUT };
+module.exports = { convert, getVersion, SUPPORTED_EXTENSIONS, IMAGE_EXTS, AUDIO_EXTS, PER_FILE_TIMEOUT };
