@@ -1,140 +1,144 @@
 #!/usr/bin/env node
 'use strict';
 
-const { execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 
-const SUPPORTED_EXTENSIONS = new Set([
-  '.docx', '.pdf', '.pptx', '.ppt', '.xlsx', '.xls',
-  '.epub', '.zip',
-  '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff',
-  '.wav', '.mp3', '.m4a',
-  '.html', '.csv', '.json',
-]);
+const { extractParseCommands } = require('./lib/parse-cmd');
+const { convert, IMAGE_EXTS } = require('./lib/engine');
+const cache = require('./lib/cache');
 
-const MAX_CONTEXT_CHARS = 100000;
-const PER_FILE_TIMEOUT = 28000;
-
-// Matches /parse, /parse-save, /parsemd, /parsemd-save + path + flags (--output-save, --output <path>)
-const PARSE_PATTERN = /\/parse(-save|md(?:-save)?)?\s+(?:@?"([^"]+)"|@?'([^']+)'|(\S+))((?:\s+--[\w-]+(?:\s+(?!--)\S+)?)*)/g;
-
-function expandPath(fp) {
-  if (!fp) return fp;
-  const clean = fp.replace(/^@/, '');
-  if (clean.startsWith('~/')) return path.join(os.homedir(), clean.slice(2));
-  return path.resolve(clean);
-}
+const MAX_TOTAL_CHARS = 250_000;
+const MIN_PER_FILE_CHARS = 20_000;
 
 function cwdOutputPath(inputPath, sessionCwd) {
   const stem = path.basename(inputPath, path.extname(inputPath));
   return path.join(sessionCwd, stem + '.md');
 }
 
-function extractParseCommands(prompt) {
-  const commands = [];
-  PARSE_PATTERN.lastIndex = 0;
-  let match;
-  while ((match = PARSE_PATTERN.exec(prompt)) !== null) {
-    const rawPath = match[2] || match[3] || match[4];
-    const filePath = expandPath(rawPath);
-    const variant = match[1] || '';
-    const flagStr = (match[5] || '').trim();
-    const outputMatch = flagStr.match(/--output\s+(\S+)/);
-    const customOutputPath = outputMatch ? expandPath(outputMatch[1]) : null;
-    const outputSave = variant.includes('-save') || flagStr.includes('--output-save') || !!customOutputPath;
-    commands.push({ filePath, outputSave, customOutputPath });
-  }
-  return commands;
+function buildImageDirective(filePath) {
+  return [
+    `_Image file:_ \`${filePath}\``,
+    '',
+    '**Instruction to Claude:** Use the `Read` tool on the absolute path above to view this image directly via your native vision. Do not guess its contents — read the file first, then proceed with the user\'s request.',
+  ].join('\n');
 }
 
-function loadCache(cacheFile) {
-  try {
-    return JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
-  } catch (_) {
-    return {};
-  }
-}
-
-function saveCache(cacheFile, cache) {
-  try {
-    fs.writeFileSync(cacheFile, JSON.stringify(cache), 'utf8');
-  } catch (_) {}
-}
-
-function cacheKey(filePath) {
-  try {
-    return `${filePath}:${fs.statSync(filePath).mtimeMs}`;
-  } catch (_) {
-    return null;
-  }
-}
-
-function runMarkitdown(filePath) {
-  return new Promise((resolve, reject) => {
-    execFile('markitdown', [filePath], { encoding: 'utf8', timeout: PER_FILE_TIMEOUT }, (err, stdout, stderr) => {
-      if (err) { err.stderr = stderr || ''; reject(err); }
-      else resolve(stdout);
-    });
-  });
-}
-
-async function processFile({ filePath, outputSave, customOutputPath }, sessionCwd, cache, cacheFile) {
-  const ext = path.extname(filePath).toLowerCase();
+async function processFile(cmd, cacheState, cacheFile) {
+  const { filePath, outputSave, customOutputPath, noCache } = cmd;
   const filename = path.basename(filePath);
+  const ext = path.extname(filePath).toLowerCase();
 
-  if (!SUPPORTED_EXTENSIONS.has(ext)) {
-    return { filename, summary: `${filename} → skipped (use @ for text files)`, markdown: null };
+  if (IMAGE_EXTS.has(ext)) {
+    if (!fs.existsSync(filePath)) {
+      return { filename, failed: true, summary: `${filename} → FAILED [FILE_NOT_FOUND]: ${filePath}` };
+    }
+    return {
+      filename,
+      markdown: buildImageDirective(filePath),
+      viaClaude: 'image',
+      outputSave,
+      customOutputPath,
+    };
   }
 
-  if (!fs.existsSync(filePath)) {
-    return { filename, summary: `${filename} → FAILED: file not found`, markdown: null };
-  }
+  let markdown = null;
+  let fromCache = false;
+  let sandboxWarning = null;
 
-  const key = cacheKey(filePath);
-  let markdown = key ? cache[key] : null;
-  let fromCache = !!markdown;
+  if (!noCache) {
+    const k = cache.key(filePath);
+    if (k && cacheState[k]) {
+      markdown = cacheState[k];
+      fromCache = true;
+    }
+  }
 
   if (!markdown) {
     try {
-      markdown = await runMarkitdown(filePath);
+      const result = await convert(filePath);
+      markdown = result.markdown;
+      sandboxWarning = result.meta.sandboxWarning || null;
     } catch (err) {
-      const rawErr = (err.stderr || err.message || 'unknown error').trim();
-      const msg = rawErr.split('\n').filter(l => l.trim()).slice(0, 3).join(' | ');
-      return { filename, summary: `${filename} → FAILED: ${msg}`, markdown: null };
+      const detail = err.detail ? ` (${err.detail})` : '';
+      return {
+        filename,
+        failed: true,
+        summary: `${filename} → FAILED [${err.code || 'ERR'}]: ${err.message}${detail}`,
+      };
     }
-
-    if (!markdown || !markdown.trim()) {
-      return { filename, summary: `${filename} → FAILED: markitdown returned empty output`, markdown: null };
-    }
-
-    if (key) {
-      cache[key] = markdown;
-      saveCache(cacheFile, cache);
+    if (!noCache) {
+      const k = cache.key(filePath);
+      if (k) {
+        cacheState[k] = markdown;
+        cache.save(cacheFile, cacheState);
+      }
     }
   }
 
-  let truncated = false;
-  if (markdown.length > MAX_CONTEXT_CHARS) {
-    markdown = markdown.slice(0, MAX_CONTEXT_CHARS);
-    truncated = true;
+  return {
+    filename,
+    markdown,
+    fromCache,
+    sandboxWarning,
+    outputSave,
+    customOutputPath,
+  };
+}
+
+function applyTotalBudget(results) {
+  const valid = results.filter(r => r.markdown && r.viaClaude !== 'image');
+  if (valid.length === 0) return;
+
+  const total = valid.reduce((a, r) => a + r.markdown.length, 0);
+  if (total <= MAX_TOTAL_CHARS) return;
+
+  if (valid.length === 1) {
+    valid[0].markdown = valid[0].markdown.slice(0, MAX_TOTAL_CHARS);
+    valid[0].truncated = true;
+    return;
   }
 
-  const charCount = markdown.length.toLocaleString();
-  let summary = `${filename} → markdown (${charCount} chars${truncated ? ', TRUNCATED' : ''}${fromCache ? ', cached' : ''})`;
+  const floor = Math.max(MIN_PER_FILE_CHARS, Math.floor(MAX_TOTAL_CHARS / valid.length / 2));
+  for (const r of valid) {
+    const share = Math.max(floor, Math.floor((r.markdown.length / total) * MAX_TOTAL_CHARS));
+    if (r.markdown.length > share) {
+      r.markdown = r.markdown.slice(0, share);
+      r.truncated = true;
+    }
+  }
+}
 
-  if (outputSave) {
-    const outPath = customOutputPath || cwdOutputPath(filePath, sessionCwd);
+function buildSummary(r, sessionCwd) {
+  if (r.failed) return r.summary;
+  if (!r.markdown) return `${r.filename} → no content`;
+
+  if (r.viaClaude === 'image') {
+    let s = `${r.filename} → routed to Claude vision (Read tool)`;
+    if (r.outputSave) s += '. Save skipped: image routing produces no markdown';
+    return s;
+  }
+
+  const chars = r.markdown.length.toLocaleString();
+  const tags = [];
+  if (r.truncated) tags.push('TRUNCATED');
+  if (r.fromCache) tags.push('cached');
+
+  let s = `${r.filename} → markdown (${chars} chars`;
+  if (tags.length) s += ', ' + tags.join(', ');
+  s += ')';
+
+  if (r.outputSave) {
+    const outPath = r.customOutputPath || cwdOutputPath(r.filePath || r.filename, sessionCwd);
     try {
-      fs.writeFileSync(outPath, markdown, 'utf8');
-      summary += `. Saved to ${outPath}`;
+      fs.writeFileSync(outPath, r.markdown, 'utf8');
+      s += `. Saved to ${outPath}`;
     } catch (err) {
-      summary += `. Save FAILED: ${err.message}`;
+      s += `. Save FAILED: ${err.message}`;
     }
   }
-
-  return { filename, summary, markdown: markdown.trim() };
+  if (r.sandboxWarning) s += `. ${r.sandboxWarning}`;
+  return s;
 }
 
 function main() {
@@ -151,36 +155,34 @@ function main() {
 
     const prompt = data.prompt || '';
     const commands = extractParseCommands(prompt);
-
-    if (commands.length === 0) {
-      process.exit(0);
-    }
+    if (commands.length === 0) process.exit(0);
 
     const sessionCwd = data.cwd || process.cwd();
     const sessionId = data.session_id || 'default';
-    const cacheFile = path.join(os.tmpdir(), `parsemd-cache-${sessionId}.json`);
-    const cache = loadCache(cacheFile);
+    const cacheFile = cache.sessionCacheFile(sessionId);
+    const cacheState = cache.load(cacheFile);
+    cache.gcStale();
 
     const results = await Promise.all(
-      commands.map(cmd => processFile(cmd, sessionCwd, cache, cacheFile))
+      commands.map(c => processFile(c, cacheState, cacheFile))
     );
 
-    const summaries = results.map(r => r.summary);
+    applyTotalBudget(results);
+
+    const summaries = results.map(r => buildSummary(r, sessionCwd));
     const contextParts = results
       .filter(r => r.markdown)
-      .map(r => `## Content of ${r.filename}\n\n${r.markdown}`);
+      .map(r => `## Content of ${r.filename}\n\n${r.markdown.trim()}`);
 
     const output = {
       systemMessage: `Parsed: ${summaries.join(' | ')}${contextParts.length ? '. Injected into context.' : ''}`,
     };
-
     if (contextParts.length > 0) {
       output.hookSpecificOutput = {
         hookEventName: 'UserPromptSubmit',
         additionalContext: contextParts.join('\n\n---\n\n'),
       };
     }
-
     process.stdout.write(JSON.stringify(output));
   });
 }

@@ -1,7 +1,8 @@
 {
-  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "parsemd",
-  "description": "Parse binary docs (DOCX, PDF, PPTX, XLSX, images, audio) into markdown and inject as context for Claude Code.",
+  "metadata": {
+    "description": "Parse binary docs (DOCX, PDF, PPTX, XLSX, images, audio) into markdown and inject as context for Claude Code."
+  },
   "owner": {
     "name": "ayastaga",
     "url": "https://github.com/ayastaga"

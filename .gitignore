@@ -1,0 +1,12 @@
+# project-local parsemd cache (auto-created when projectCache=true in settings)
+.parsemd/
+
+# node + editor cruft
+node_modules/
+.DS_Store
+*.log
+
+# scratch / ad-hoc files at repo root
+/Snapdragon*.pdf
+/scratch/
+/*.tmp

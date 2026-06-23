@@ -13,6 +13,8 @@ REPO="ayastaga/parsemd"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 MARKETPLACE_NAME="parsemd"
 PLUGIN_KEY="parsemd@parsemd"
+HOOK_TIMEOUT=320
+LIB_FILES=("util.js" "sandbox.js" "engine.js" "cache.js" "parse-cmd.js")
 STANDALONE=false
 
 for arg in "$@"; do
@@ -57,14 +59,12 @@ info "markitdown $(markitdown --version 2>/dev/null || echo '(version unknown)')
 # ── Install ───────────────────────────────────────────────────────────────────
 
 if [[ "$STANDALONE" == true ]]; then
-  # Standalone: bare /parsemd command, no plugin namespace
-  HOOK_DIR="$HOME/.claude/hooks"
+  HOOK_DIR="$HOME/.claude/hooks/parsemd"
   CMD_DIR="$HOME/.claude/commands"
   SETTINGS="$HOME/.claude/settings.json"
 
-  mkdir -p "$HOOK_DIR" "$CMD_DIR"
+  mkdir -p "$HOOK_DIR/lib" "$CMD_DIR"
 
-  # Symlink if running from a cloned repo; download snapshot if curl-piped
   SCRIPT_DIR=""
   if [[ -n "${BASH_SOURCE[0]:-}" && "${BASH_SOURCE[0]}" != "bash" ]]; then
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || true
@@ -74,9 +74,16 @@ if [[ "$STANDALONE" == true ]]; then
   if [[ -n "$SCRIPT_DIR" && -f "$HOOK_SRC" ]]; then
     info "Symlinking hook from repo (updates apply automatically)..."
     ln -sf "$HOOK_SRC" "${HOOK_DIR}/parsemd-hook.js"
+    mkdir -p "${HOOK_DIR}/lib"
+    for f in "${LIB_FILES[@]}"; do
+      ln -sf "${SCRIPT_DIR}/hooks/lib/${f}" "${HOOK_DIR}/lib/${f}"
+    done
   else
-    info "Downloading hook script..."
+    info "Downloading hook scripts..."
     curl -fsSL "${RAW}/hooks/parsemd-hook.js" -o "${HOOK_DIR}/parsemd-hook.js"
+    for f in "${LIB_FILES[@]}"; do
+      curl -fsSL "${RAW}/hooks/lib/${f}" -o "${HOOK_DIR}/lib/${f}"
+    done
     warn "Snapshot installed. Re-run ./install.sh --standalone from a cloned repo for auto-updates."
   fi
 
@@ -84,22 +91,49 @@ if [[ "$STANDALONE" == true ]]; then
   printf -- '---\ndescription: Parse binary documents into markdown context\n---\n\n/parse $ARGUMENTS\n' \
     > "${CMD_DIR}/parsemd.md"
 
-  # Merge hook into settings.json
   info "Registering hook in ${SETTINGS}..."
   if [[ ! -f "$SETTINGS" ]]; then
     echo '{}' > "$SETTINGS"
   fi
   HOOK_CMD="node \"${HOOK_DIR}/parsemd-hook.js\""
-  # Use node to safely merge — avoids clobbering existing hooks
-  node - "$SETTINGS" "$HOOK_CMD" <<'EOF'
+
+  HOOK_CMD="$HOOK_CMD" HOOK_TIMEOUT="$HOOK_TIMEOUT" SETTINGS_PATH="$SETTINGS" node <<'EOF'
 const fs = require('fs');
-const [,, settingsPath, hookCmd] = process.argv;
+const settingsPath = process.env.SETTINGS_PATH;
+const hookCmd = process.env.HOOK_CMD;
+const timeout = Number(process.env.HOOK_TIMEOUT) || 320;
+
 const s = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
 s.hooks = s.hooks || {};
 s.hooks.UserPromptSubmit = s.hooks.UserPromptSubmit || [];
-const entry = { matcher: '/parse', hooks: [{ type: 'command', command: hookCmd, timeout: 35 }] };
-if (!s.hooks.UserPromptSubmit.some(e => e.hooks && e.hooks.some(h => h.command === hookCmd))) {
-  s.hooks.UserPromptSubmit.push(entry);
+
+const existing = [];
+for (const e of s.hooks.UserPromptSubmit) {
+  if (!e || !Array.isArray(e.hooks)) continue;
+  for (const h of e.hooks) {
+    if (typeof h.command !== 'string') continue;
+    if (/parsemd-hook\.js|CLAUDE_PLUGIN_ROOT.*parsemd/.test(h.command)) existing.push(h.command);
+  }
+}
+
+if (existing.some(c => c !== hookCmd)) {
+  console.error('\n[parsemd] WARNING: Detected another parsemd hook already registered:');
+  for (const c of existing) console.error('  ' + c);
+  console.error('  Multiple registrations cause double-fire on /parse. Remove the other entry from settings.json or aborting may be safer.\n');
+}
+
+let updated = false;
+for (const e of s.hooks.UserPromptSubmit) {
+  if (!e || !Array.isArray(e.hooks)) continue;
+  for (const h of e.hooks) {
+    if (h.command === hookCmd) { h.timeout = timeout; updated = true; }
+  }
+}
+if (!updated) {
+  s.hooks.UserPromptSubmit.push({
+    matcher: '/parse',
+    hooks: [{ type: 'command', command: hookCmd, timeout }],
+  });
 }
 fs.writeFileSync(settingsPath, JSON.stringify(s, null, 2) + '\n');
 EOF
@@ -109,7 +143,15 @@ EOF
   info "Usage: /parsemd ~/path/to/file.pdf"
 
 else
-  # Plugin install: namespaced /parsemd:parsemd
+  if [[ -f "$HOME/.claude/settings.json" ]]; then
+    if node -e "const s=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));const h=(s.hooks&&s.hooks.UserPromptSubmit)||[];const found=h.some(e=>(e.hooks||[]).some(x=>/parsemd-hook\.js/.test(x.command||'')));process.exit(found?0:1)" "$HOME/.claude/settings.json" 2>/dev/null; then
+      warn "Detected a standalone parsemd hook in ~/.claude/settings.json."
+      warn "Installing the plugin alongside it will cause double-fire on /parse."
+      warn "Remove the standalone hook entry first, or run: ./install.sh --standalone to upgrade it in place."
+      exit 1
+    fi
+  fi
+
   info "Registering marketplace '${MARKETPLACE_NAME}'..."
   claude plugin marketplace add "${REPO}" 2>/dev/null \
     && info "Marketplace registered." \
@@ -123,5 +165,5 @@ else
   info "Done. Restart Claude Code."
   info ""
   info "Usage: /parsemd:parsemd ~/path/to/file.pdf"
-  info "Help:  /parsemd:help"
+  info "Help:  /parsemd:parsemd-help"
 fi
