@@ -49,7 +49,9 @@ When you send a message containing `/parsemd <file>`, this happens before Claude
 4. The resulting markdown is annotated with page/slide/sheet anchors (`<!-- page:N -->`, `<!-- slide:N -->`, `<!-- sheet:Name -->`) for structured formats.
 5. A `[parsemd]` provenance header is prepended, recording the source path, engine version, SHA256 hash, timestamp, and page/slide/sheet count.
 6. Image files are routed directly to Claude's native vision via the `Read` tool — markitdown is not invoked for images.
-7. The combined markdown is cached (per-session in `$TMPDIR`, or opt-in per-project at `<cwd>/.parsemd/cache/`) and injected into Claude's context, capped at 250 000 characters total across all files in the prompt.
+7. If slicing flags are present (`--pages`, `--section`, `--heading`, `--sheet`, `--head`, `--tail`), the markdown is sliced before injection.
+8. If a `--budget` flag is present, the output is capped at the specified token count (chars/4).
+9. The combined markdown is cached (per-session in `$TMPDIR`, or opt-in per-project at `<cwd>/.parsemd/cache/`) and injected into Claude's context, capped at 250 000 characters total across all files in the prompt.
 
 You see a one-line summary with a first-heading preview:
 
@@ -114,7 +116,7 @@ pip install 'markitdown[all]'
 
 ```bash
 mkdir -p ~/.claude/hooks/parsemd ~/.claude/hooks/parsemd/lib
-for f in parsemd-hook.js lib/util.js lib/sandbox.js lib/engine.js lib/cache.js lib/parse-cmd.js lib/settings.js lib/url.js lib/provenance.js lib/anchors.js; do
+for f in parsemd-hook.js lib/util.js lib/sandbox.js lib/engine.js lib/cache.js lib/parse-cmd.js lib/settings.js lib/url.js lib/provenance.js lib/anchors.js lib/slice.js lib/budget.js; do
   curl -fsSL "https://raw.githubusercontent.com/ayastaga/parsemd/main/hooks/$f" \
     -o "$HOME/.claude/hooks/parsemd/$f"
 done
@@ -216,6 +218,48 @@ Save to a specific path (works with both `/parsemd` and `/parsemd-save`):
 /parsemd-save ~/docs/report.pdf --output ~/notes/report.md
 ```
 
+### Slice a document
+
+Extract specific parts of a document instead of injecting the full content:
+
+```
+/parsemd report.pdf --pages 1-5
+/parsemd report.pdf --pages 3,7,12-15
+/parsemd slides.pptx --pages 1-3
+/parsemd report.pdf --section "Risk Factors"
+/parsemd report.pdf --heading 2
+/parsemd spreadsheet.xlsx --sheet Revenue
+/parsemd spreadsheet.xlsx --sheet 0,2
+/parsemd report.pdf --head 500
+/parsemd report.pdf --tail 200
+/parsemd report.pdf --head 500 --tail 200
+/parsemd report.pdf --budget 20k
+```
+
+Slicing flags can be combined. The order of application is: `--pages`/`--sheet` first, then `--section`, then `--heading`, then `--head`/`--tail`, then `--budget`.
+
+The `--budget` flag caps output at N tokens (where 1 token = 4 characters). Accepts `k` and `m` suffixes: `--budget 20k` means 20,000 tokens (80,000 characters).
+
+### Summarize a document
+
+Claude reads the parsed document and produces a maximally compressed summary, preserving key facts, numbers, dates, and citations:
+
+```
+/parsemd-summarize report.pdf
+```
+
+No budget is applied — Claude compacts using its own reasoning. The summary uses your in-session Claude.
+
+### Compare two documents
+
+Claude reads both parsed documents and produces a structured comparison with citations:
+
+```
+/parsemd-diff old.docx /parsemd-diff new.docx
+```
+
+Differences are listed as additions, removals, and changes, grouped by topic or section.
+
 ### Skip the cache for sensitive files
 
 ```
@@ -300,7 +344,7 @@ Plain text files (`.txt`, `.md`, `.py`, etc.) don't need this plugin — use Cla
 
 **Images route through your in-session Claude — no API keys required.** When you `/parsemd photo.png`, parsemd does not invoke markitdown. Instead it instructs Claude to open the image via the native `Read` tool, which uses Claude's own vision. You do not need `MARKITDOWN_LLM_CLIENT`, `OPENAI_API_KEY`, or any other credential.
 
-**Audio is not yet routed through Claude.** As of version 1.2, audio files (`.wav`, `.mp3`, `.m4a`) still fall back to markitdown's transcription path. parsemd does not configure an LLM client for you. If markitdown produces no text, parsemd surfaces an `AUDIO_NOT_SUPPORTED` error. In-session-Claude audio routing is planned for Phase 4 — until then, transcribe externally (e.g. with a local Whisper build) and `/parsemd` the resulting `.txt`.
+**Audio is not yet routed through Claude.** As of version 1.3, audio files (`.wav`, `.mp3`, `.m4a`) still fall back to markitdown's transcription path. parsemd does not configure an LLM client for you. If markitdown produces no text, parsemd surfaces an `AUDIO_NOT_SUPPORTED` error. In-session-Claude audio routing is planned for Phase 4 — until then, transcribe externally (e.g. with a local Whisper build) and `/parsemd` the resulting `.txt`.
 
 ---
 
@@ -320,8 +364,8 @@ Plain text files (`.txt`, `.md`, `.py`, etc.) don't need this plugin — use Cla
 parsemd is evolving from a file-conversion utility into a document context-engineering layer. Each phase is additive — no existing commands are removed or renamed.
 
 - **1.1 (done)** — sandboxed parser, categorized errors, 5-min timeout, on-disk session cache with 24h GC, tightened matcher (skips code blocks), `--no-cache` flag, total-context budget, image routing through in-session Claude.
-- **1.2 (current)** — `[parsemd]` provenance header on every injection, page/slide/sheet anchors (`<!-- page:N -->` etc.), HTTP(S) URL input, opt-in project-local cache at `<cwd>/.parsemd/cache/` (SHA256-keyed, auto-`.gitignore`), first-heading preview in summary line, engine version detect, engine seam (`markitdown` default).
-- **1.3 (planned)** — slicing (`--pages`, `--section`, `--heading`, `--sheet`, `--head`, `--tail`), token budgeting (`--budget 20k`), `/parsemd-summarize` (Claude compacts maximally), `/parsemd-diff` (Claude compares two docs with citations).
+- **1.2 (done)** — `[parsemd]` provenance header on every injection, page/slide/sheet anchors (`<!-- page:N -->` etc.), HTTP(S) URL input, opt-in project-local cache at `<cwd>/.parsemd/cache/` (SHA256-keyed, auto-`.gitignore`), first-heading preview in summary line, engine version detect, engine seam (`markitdown` default).
+- **1.3 (current)** — slicing (`--pages`, `--section`, `--heading`, `--sheet`, `--head`, `--tail`), token budgeting (`--budget 20k`), `/parsemd-summarize` (Claude compacts maximally), `/parsemd-diff` (Claude compares two docs with citations).
 - **1.4 (planned)** — folder ingestion (`/parsemd-folder`), knowledge packs (`/parsemd-pack`), incremental updates, semantic extraction via in-session Claude (`/parsemd-relevant`), audio routing through in-session Claude.
 
 ---

@@ -95,3 +95,62 @@ test('matches https URL with .docx tail', () => {
   assert.equal(out.length, 1);
   assert.equal(out[0].filePath, 'https://cdn.example.com/files/doc.docx');
 });
+
+// ── Phase 2: slicing flags ──────────────────────────────────────────────────
+
+test('captures --pages flag', () => {
+  const out = extractParseCommands('/parsemd report.pdf --pages 1-3,5');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].pages, '1-3,5');
+});
+
+test('captures --section flag', () => {
+  const out = extractParseCommands('/parsemd report.pdf --section Risk');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].section, 'Risk');
+});
+
+test('captures --heading flag', () => {
+  const out = extractParseCommands('/parsemd report.pdf --heading 2');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].heading, '2');
+});
+
+test('captures --sheet flag', () => {
+  const out = extractParseCommands('/parsemd spreadsheet.xlsx --sheet Revenue');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].sheet, 'Revenue');
+});
+
+test('captures --budget flag', () => {
+  const out = extractParseCommands('/parsemd report.pdf --budget 20k');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].budget, '20k');
+});
+
+test('captures --head and --tail flags', () => {
+  const out = extractParseCommands('/parsemd report.pdf --head 500 --tail 200');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].head, '500');
+  assert.equal(out[0].tail, '200');
+});
+
+// ── Phase 2: mode detection ─────────────────────────────────────────────────
+
+test('mode is summarize for /parse-summarize', () => {
+  const out = extractParseCommands('/parse-summarize report.pdf');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].mode, 'summarize');
+});
+
+test('mode is diff for /parse-diff', () => {
+  const out = extractParseCommands('/parse-diff old.docx');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].mode, 'diff');
+});
+
+test('mode is parse for regular /parsemd', () => {
+  const out = extractParseCommands('/parsemd report.pdf');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].mode, 'parse');
+});

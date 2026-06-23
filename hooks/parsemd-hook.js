@@ -11,6 +11,8 @@ const settings = require('./lib/settings');
 const { isUrl, download } = require('./lib/url');
 const { annotate } = require('./lib/anchors');
 const { hashFile, buildHeader } = require('./lib/provenance');
+const { applySlicing } = require('./lib/slice');
+const { parseBudget, applyBudget, allocateMultiFileBudget } = require('./lib/budget');
 
 const MAX_TOTAL_CHARS = 250_000;
 const MIN_PER_FILE_CHARS = 20_000;
@@ -161,26 +163,56 @@ async function processFile(cmd, ctx) {
 
   // Annotate (page/slide/sheet anchors)
   const ann = annotate(viaUrl ? urlBasename(filePath) : filePath, markdown);
-  markdown = ann.markdown;
+  const annotated = { markdown: ann.markdown, pageCount: ann.pageCount, format: ann.format };
+
+  // Track full char count before slicing
+  const fullCharCount = annotated.markdown.length;
+
+  // Slicing
+  let sliced = applySlicing(annotated.markdown, {
+    pages: cmd.pages,
+    section: cmd.section,
+    heading: cmd.heading,
+    sheet: cmd.sheet,
+    head: cmd.head,
+    tail: cmd.tail,
+  });
+
+  const wasSliced = sliced.length < fullCharCount;
+
+  // Per-file budget
+  let budgetApplied = false;
+  if (cmd.budget) {
+    const tokens = parseBudget(cmd.budget);
+    if (tokens) {
+      const b = applyBudget(sliced, tokens);
+      sliced = b.markdown;
+      budgetApplied = b.truncated;
+    }
+  }
 
   return {
     filename: displayName,
     source: viaUrl ? filePath : localPath,
-    markdown,
+    markdown: sliced,
+    fullCharCount,
     fromCache,
     fromCacheType,
     sandboxWarning,
     outputSave,
     customOutputPath,
     sha256,
-    pageCount: ann.pageCount,
-    format: ann.format,
+    pageCount: annotated.pageCount,
+    format: annotated.format,
     viaUrl: viaUrl ? filePath : null,
+    sliced: wasSliced,
+    budgetApplied,
+    mode: cmd.mode,
   };
 }
 
 function applyTotalBudget(results) {
-  const valid = results.filter(r => r.markdown && r.viaClaude !== 'image');
+  const valid = results.filter(r => r.markdown && r.viaClaude !== 'image' && !r.budgetApplied);
   if (valid.length === 0) return;
 
   const total = valid.reduce((a, r) => a + r.markdown.length, 0);
@@ -223,6 +255,7 @@ function buildSummary(r, sessionCwd) {
   const chars = r.markdown.length.toLocaleString();
   const tags = [];
   if (r.truncated) tags.push('TRUNCATED');
+  if (r.sliced) tags.push('sliced');
   if (r.fromCache && r.fromCacheType) {
     tags.push(`cached/${r.fromCacheType}`);
   } else if (r.fromCache) {
@@ -234,6 +267,10 @@ function buildSummary(r, sessionCwd) {
   if (r.pageCount) s += `, ${r.pageCount} ${unitFor(r.format)}`;
   if (tags.length) s += ', ' + tags.join(', ');
   s += ')';
+
+  // Mode tags
+  if (r.mode === 'summarize') s += ' → summarize';
+  if (r.mode === 'diff') s += ' → diff';
 
   // First heading preview
   const heading = firstHeading(r.markdown);
@@ -284,6 +321,15 @@ function main() {
     const results = await Promise.all(
       commands.map(c => processFile(c, ctx))
     );
+
+    // Global budget flag: if any command has a budget, use allocateMultiFileBudget
+    const globalBudget = commands.find(c => c.budget);
+    if (globalBudget && results.length > 1) {
+      const tokens = parseBudget(globalBudget.budget);
+      if (tokens) {
+        allocateMultiFileBudget(results, tokens);
+      }
+    }
 
     applyTotalBudget(results);
 

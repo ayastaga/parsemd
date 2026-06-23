@@ -2,13 +2,19 @@
 
 const { expandPath, stripCodeBlocks } = require('./util');
 
-const PARSE_PATTERN = /(?:^|\s)\/parse(-save|md(?:-save)?)?(?=\s)\s+(?:@?"([^"\n]+)"|@?'([^'\n]+)'|(\S+))((?:\s+--[\w-]+(?:\s+(?!--|\/)[^\s][^\s]*)?)*)/g;
+const PARSE_PATTERN = /(?:^|\s)\/parse(-save|-summarize|-diff|md(?:-save)?)?(?=\s)\s+(?:@?"([^"\n]+)"|@?'([^'\n]+)'|(\S+))((?:\s+--[\w-]+(?:\s+(?!--|\/)[^\s][^\s]*)?)*)/g;
 
 const VALID_PATH_TAIL = /\.(docx|pdf|pptx|ppt|xlsx|xls|epub|zip|jpg|jpeg|png|gif|bmp|tiff|wav|mp3|m4a|html|csv|json)$/i;
 
 function looksLikePath(p) {
   if (!p) return false;
   return VALID_PATH_TAIL.test(p);
+}
+
+function extractFlag(flagStr, name) {
+  const re = new RegExp('--' + name + '\\s+(\\S+)');
+  const m = flagStr.match(re);
+  return m ? m[1] : null;
 }
 
 function extractParseCommands(prompt) {
@@ -29,12 +35,24 @@ function extractParseCommands(prompt) {
     const outputSave = variant.includes('-save') || flagStr.includes('--output-save') || !!customOutputPath;
     const noCache = flagStr.includes('--no-cache');
 
+    let mode = 'parse';
+    if (variant === '-summarize') mode = 'summarize';
+    else if (variant === '-diff') mode = 'diff';
+
     commands.push({
       filePath,
       rawPath,
+      mode,
       outputSave,
       customOutputPath,
       noCache,
+      pages: extractFlag(flagStr, 'pages'),
+      section: extractFlag(flagStr, 'section'),
+      heading: extractFlag(flagStr, 'heading'),
+      sheet: extractFlag(flagStr, 'sheet'),
+      budget: extractFlag(flagStr, 'budget'),
+      head: extractFlag(flagStr, 'head'),
+      tail: extractFlag(flagStr, 'tail'),
     });
   }
   return commands;

@@ -14,7 +14,7 @@ RAW="https://raw.githubusercontent.com/${REPO}/main"
 MARKETPLACE_NAME="parsemd"
 PLUGIN_KEY="parsemd@parsemd"
 HOOK_TIMEOUT=320
-LIB_FILES=("util.js" "sandbox.js" "engine.js" "cache.js" "parse-cmd.js" "settings.js" "url.js" "provenance.js" "anchors.js")
+LIB_FILES=("util.js" "sandbox.js" "engine.js" "cache.js" "parse-cmd.js" "settings.js" "url.js" "provenance.js" "anchors.js" "slice.js" "budget.js")
 STANDALONE=false
 
 for arg in "$@"; do

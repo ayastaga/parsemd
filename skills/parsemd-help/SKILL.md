@@ -15,12 +15,26 @@ Display this reference card. One-shot — output only, do not persist anything.
 |---------|------|
 | `/parsemd <file>` | Convert binary doc → inject markdown into context |
 | `/parsemd-save <file>` | Convert → inject + save `.md` to current directory |
+| `/parsemd-summarize <file>` | Convert → Claude compacts maximally (no budget) |
+| `/parsemd-diff <file1> ... <file2>` | Convert two docs → Claude compares with citations |
 | `/parsemd-help` | This card |
 
 > **Plugin install** (namespaced): prefix with `/parsemd:` (e.g., `/parsemd:parsemd`)
 > **Standalone install**: bare commands (e.g., `/parsemd`)
 
-## Flags
+## Slicing Flags
+
+| Flag | Effect |
+|------|--------|
+| `--pages 1-3,5` | Keep only specified page/slide ranges |
+| `--section "Risk Factors"` | Extract a named section and its subsections |
+| `--heading 2` | Extract all sections at heading level N |
+| `--sheet Revenue` | Keep only named or indexed sheets |
+| `--budget 20k` | Cap output at N tokens (chars/4). Accepts k/m suffix |
+| `--head 500` | Keep first N tokens |
+| `--tail 500` | Keep last N tokens |
+
+## General Flags
 
 | Flag | Effect |
 |------|--------|
@@ -56,6 +70,13 @@ Text files (`.txt`, `.md`, `.py`, etc.) — use `@` directly.
 /parsemd a.pdf compare with /parsemd b.docx
 /parsemd report.pdf --no-cache
 /parsemd https://example.com/report.pdf
+/parsemd report.pdf --pages 1-5
+/parsemd report.pdf --section "Risk Factors"
+/parsemd spreadsheet.xlsx --sheet Revenue
+/parsemd report.pdf --budget 20k
+/parsemd report.pdf --head 500 --tail 200
+/parsemd-summarize report.pdf
+/parsemd-diff old.docx /parsemd-diff new.docx
 ```
 
 Docs: https://github.com/ayastaga/parsemd
