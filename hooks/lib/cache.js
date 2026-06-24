@@ -65,19 +65,24 @@ function projectCacheDir(sessionCwd) {
   return path.join(sessionCwd, '.parsemd', 'cache');
 }
 
+function ensureGitignoreEntry(sessionCwd, entry) {
+  const parsemdDir = path.join(sessionCwd, '.parsemd');
+  fs.mkdirSync(parsemdDir, { recursive: true });
+  const giPath = path.join(parsemdDir, '.gitignore');
+  try {
+    const existing = fs.readFileSync(giPath, 'utf8');
+    if (!existing.includes(entry)) {
+      fs.writeFileSync(giPath, existing.trimEnd() + '\n' + entry + '\n', 'utf8');
+    }
+  } catch (_) {
+    fs.writeFileSync(giPath, entry + '\n', 'utf8');
+  }
+}
+
 function ensureProjectCache(sessionCwd) {
   const dir = projectCacheDir(sessionCwd);
   fs.mkdirSync(dir, { recursive: true });
-
-  const giPath = path.join(sessionCwd, '.parsemd', '.gitignore');
-  try {
-    const existing = fs.readFileSync(giPath, 'utf8');
-    if (!existing.includes('cache/')) {
-      fs.writeFileSync(giPath, existing.trimEnd() + '\ncache/\n', 'utf8');
-    }
-  } catch (_) {
-    fs.writeFileSync(giPath, 'cache/\n', 'utf8');
-  }
+  ensureGitignoreEntry(sessionCwd, 'cache/');
   return dir;
 }
 
@@ -99,6 +104,6 @@ function writeProjectCache(sessionCwd, sha, markdown) {
 
 module.exports = {
   sessionCacheFile, load, save, key, gcStale,
-  hashKey, projectCacheDir, ensureProjectCache, readProjectCache, writeProjectCache,
+  hashKey, projectCacheDir, ensureProjectCache, ensureGitignoreEntry, readProjectCache, writeProjectCache,
   CACHE_DIR, CACHE_TTL_MS,
 };

@@ -4,8 +4,8 @@
 const fs = require('fs');
 const path = require('path');
 
-const { extractParseCommands } = require('./lib/parse-cmd');
-const { convert, getVersion, IMAGE_EXTS } = require('./lib/engine');
+const { extractParseCommands, PARSE_PATTERN } = require('./lib/parse-cmd');
+const { convert, getVersion, IMAGE_EXTS, AUDIO_EXTS } = require('./lib/engine');
 const cache = require('./lib/cache');
 const settings = require('./lib/settings');
 const { isUrl, download } = require('./lib/url');
@@ -13,6 +13,11 @@ const { annotate } = require('./lib/anchors');
 const { hashFile, buildHeader } = require('./lib/provenance');
 const { applySlicing } = require('./lib/slice');
 const { parseBudget, applyBudget, allocateMultiFileBudget } = require('./lib/budget');
+const { scanFolder } = require('./lib/folder');
+const { createPack, loadPack } = require('./lib/pack');
+const { detectChanges, writeFileManifest, buildManifestEntry } = require('./lib/manifest');
+const { extractRelevant, extractQuery, FULL_INJECT_THRESHOLD } = require('./lib/relevant');
+const pixel = require('./lib/pixel');
 
 const MAX_TOTAL_CHARS = 250_000;
 const MIN_PER_FILE_CHARS = 20_000;
@@ -43,6 +48,14 @@ function buildImageDirective(filePath) {
     `_Image file:_ \`${filePath}\``,
     '',
     '**Instruction to Claude:** Use the `Read` tool on the absolute path above to view this image directly via your native vision. Do not guess its contents — read the file first, then proceed with the user\'s request.',
+  ].join('\n');
+}
+
+function buildAudioDirective(filePath) {
+  return [
+    `_Audio file:_ \`${filePath}\``,
+    '',
+    '**Instruction to Claude:** Attempt to use the `Read` tool on the absolute path above to listen to this audio file. If the Read tool does not support audio files, inform the user that audio transcription is not yet available through Claude Code\'s native tools, and suggest they transcribe externally (e.g., using OpenAI Whisper locally) then use `/parsemd` on the resulting `.txt` file.',
   ].join('\n');
 }
 
@@ -79,6 +92,22 @@ async function processFile(cmd, ctx) {
       filename: displayName,
       markdown: buildImageDirective(filePath),
       viaClaude: 'image',
+      outputSave,
+      customOutputPath,
+    };
+  }
+
+  if (AUDIO_EXTS.has(ext)) {
+    if (viaUrl) {
+      return { filename: displayName, failed: true, summary: `${displayName} → FAILED: cannot route remote audio to Claude — download first` };
+    }
+    if (!fs.existsSync(filePath)) {
+      return { filename: displayName, failed: true, summary: `${displayName} → FAILED [FILE_NOT_FOUND]: ${filePath}` };
+    }
+    return {
+      filename: displayName,
+      markdown: buildAudioDirective(filePath),
+      viaClaude: 'audio',
       outputSave,
       customOutputPath,
     };
@@ -163,13 +192,25 @@ async function processFile(cmd, ctx) {
 
   // Annotate (page/slide/sheet anchors)
   const ann = annotate(viaUrl ? urlBasename(filePath) : filePath, markdown);
-  const annotated = { markdown: ann.markdown, pageCount: ann.pageCount, format: ann.format };
+  let annotatedMd = ann.markdown;
+  const { pageCount, format } = ann;
+
+  // Hybrid pixel fallback for low-text PDF pages
+  if (format === 'pdf' && pixel.isRenderAvailable()) {
+    const lowPages = pixel.detectLowText(annotatedMd, pageCount);
+    if (lowPages.length > 0) {
+      const rendered = pixel.renderPages(localPath, lowPages);
+      if (rendered.length > 0) {
+        annotatedMd = pixel.replacePageSections(annotatedMd, lowPages, rendered);
+      }
+    }
+  }
 
   // Track full char count before slicing
-  const fullCharCount = annotated.markdown.length;
+  const fullCharCount = annotatedMd.length;
 
   // Slicing
-  let sliced = applySlicing(annotated.markdown, {
+  let sliced = applySlicing(annotatedMd, {
     pages: cmd.pages,
     section: cmd.section,
     heading: cmd.heading,
@@ -179,6 +220,20 @@ async function processFile(cmd, ctx) {
   });
 
   const wasSliced = sliced.length < fullCharCount;
+
+  // Semantic extraction for relevant mode
+  let relevanceFiltered = false;
+  if (cmd.mode === 'relevant' && sliced.length >= FULL_INJECT_THRESHOLD) {
+    const query = cmd.query || extractQuery(ctx.prompt, PARSE_PATTERN);
+    if (query) {
+      const budgetTokens = cmd.budget ? parseBudget(cmd.budget) : null;
+      const result = extractRelevant(sliced, query, budgetTokens);
+      if (result) {
+        sliced = result.output;
+        relevanceFiltered = true;
+      }
+    }
+  }
 
   // Per-file budget
   let budgetApplied = false;
@@ -202,17 +257,18 @@ async function processFile(cmd, ctx) {
     outputSave,
     customOutputPath,
     sha256,
-    pageCount: annotated.pageCount,
-    format: annotated.format,
+    pageCount,
+    format,
     viaUrl: viaUrl ? filePath : null,
     sliced: wasSliced,
     budgetApplied,
+    relevanceFiltered,
     mode: cmd.mode,
   };
 }
 
 function applyTotalBudget(results) {
-  const valid = results.filter(r => r.markdown && r.viaClaude !== 'image' && !r.budgetApplied);
+  const valid = results.filter(r => r.markdown && !r.viaClaude && !r.budgetApplied);
   if (valid.length === 0) return;
 
   const total = valid.reduce((a, r) => a + r.markdown.length, 0);
@@ -252,6 +308,12 @@ function buildSummary(r, sessionCwd) {
     return s;
   }
 
+  if (r.viaClaude === 'audio') {
+    let s = `${r.filename} → routed to Claude audio (Read tool)`;
+    if (r.outputSave) s += '. Save skipped: audio routing produces no markdown';
+    return s;
+  }
+
   const chars = r.markdown.length.toLocaleString();
   const tags = [];
   if (r.truncated) tags.push('TRUNCATED');
@@ -271,6 +333,9 @@ function buildSummary(r, sessionCwd) {
   // Mode tags
   if (r.mode === 'summarize') s += ' → summarize';
   if (r.mode === 'diff') s += ' → diff';
+  if (r.mode === 'relevant' && r.relevanceFiltered) s += ' → relevant';
+  if (r.mode === 'folder') s += ' → folder';
+  if (r.mode === 'pack') s += ' → pack';
 
   // First heading preview
   const heading = firstHeading(r.markdown);
@@ -316,11 +381,152 @@ function main() {
       getVersion(),
     ]);
 
-    const ctx = { sessionCwd, sessionId, cacheState, cacheFile, cfg, engineVersion };
+    const ctx = { sessionCwd, sessionId, cacheState, cacheFile, cfg, engineVersion, prompt };
 
-    const results = await Promise.all(
-      commands.map(c => processFile(c, ctx))
+    // Expand folder commands into individual file commands
+    // Handle pack load/create separately
+    const expandedCommands = [];
+    const results = [];
+    const folderWarnings = [];
+
+    for (const cmd of commands) {
+      if (cmd.mode === 'folder') {
+        try {
+          const { files, total, warning } = scanFolder(cmd.filePath, {
+            depth: cmd.depth ? parseInt(cmd.depth, 10) : undefined,
+            include: cmd.include || null,
+            exclude: cmd.exclude || null,
+          });
+          if (warning) folderWarnings.push(warning);
+
+          // Incremental: only process changed files if project cache enabled
+          if (cfg.projectCache) {
+            const contextId = `folder:${cmd.filePath}`;
+            const changes = detectChanges(sessionCwd, contextId, files);
+            const toProcess = [...changes.added, ...changes.changed];
+
+            for (const fp of toProcess) {
+              expandedCommands.push({ ...cmd, filePath: fp, mode: 'parse' });
+            }
+            for (const fp of changes.unchanged) {
+              const sha = cache.hashKey(fp);
+              const cached = sha ? cache.readProjectCache(sessionCwd, sha) : null;
+              if (cached) {
+                results.push({
+                  filename: path.basename(fp),
+                  source: fp,
+                  markdown: cached,
+                  fromCache: true,
+                  fromCacheType: 'project',
+                  sha256: sha,
+                  mode: 'folder',
+                });
+              } else {
+                expandedCommands.push({ ...cmd, filePath: fp, mode: 'parse' });
+              }
+            }
+          } else {
+            for (const fp of files) {
+              expandedCommands.push({ ...cmd, filePath: fp, mode: 'parse' });
+            }
+          }
+        } catch (err) {
+          results.push({
+            filename: path.basename(cmd.filePath),
+            failed: true,
+            summary: `${cmd.filePath} → FAILED [${err.code || 'ERR'}]: ${err.message}`,
+          });
+        }
+      } else if (cmd.mode === 'pack') {
+        const isDir = (() => {
+          try { return fs.statSync(cmd.filePath).isDirectory(); } catch (_) { return false; }
+        })();
+
+        if (isDir || cmd.name) {
+          // Create pack: scan folder, process files, bundle
+          try {
+            const packName = cmd.name || path.basename(cmd.filePath);
+            const { files, warning } = scanFolder(cmd.filePath, {
+              depth: cmd.depth ? parseInt(cmd.depth, 10) : undefined,
+              include: cmd.include || null,
+              exclude: cmd.exclude || null,
+            });
+            if (warning) folderWarnings.push(warning);
+            for (const fp of files) {
+              expandedCommands.push({ ...cmd, filePath: fp, mode: 'parse', _packName: packName });
+            }
+          } catch (err) {
+            results.push({
+              filename: cmd.filePath,
+              failed: true,
+              summary: `${cmd.filePath} → FAILED [${err.code || 'ERR'}]: ${err.message}`,
+            });
+          }
+        } else {
+          // Load pack
+          try {
+            const { markdown, manifest } = loadPack(sessionCwd, cmd.filePath);
+            results.push({
+              filename: `pack:${manifest.name}`,
+              markdown,
+              source: `pack:${manifest.name}`,
+              fromCache: true,
+              fromCacheType: 'pack',
+              mode: 'pack',
+              sha256: null,
+            });
+          } catch (err) {
+            results.push({
+              filename: cmd.filePath,
+              failed: true,
+              summary: `pack "${cmd.filePath}" → FAILED [${err.code || 'ERR'}]: ${err.message}`,
+            });
+          }
+        }
+      } else {
+        expandedCommands.push(cmd);
+      }
+    }
+
+    // Process all expanded file commands
+    const fileResults = await Promise.all(
+      expandedCommands.map(c => processFile(c, ctx))
     );
+    results.push(...fileResults);
+
+    // If pack creation was requested, bundle processed files
+    const packCreateCmds = commands.filter(c => c.mode === 'pack' && (c.name || (() => {
+      try { return fs.statSync(c.filePath).isDirectory(); } catch (_) { return false; }
+    })()));
+    for (const cmd of packCreateCmds) {
+      const packName = cmd.name || path.basename(cmd.filePath);
+      const packFiles = fileResults.filter(r => !r.failed && r.markdown);
+      if (packFiles.length > 0) {
+        try {
+          const info = createPack(sessionCwd, packName, packFiles);
+          folderWarnings.push(`Pack "${packName}" created: ${info.fileCount} files, ${info.totalChars.toLocaleString()} chars`);
+        } catch (_) {}
+      }
+    }
+
+    // Update folder manifests
+    if (cfg.projectCache) {
+      for (const cmd of commands) {
+        if (cmd.mode === 'folder') {
+          try {
+            const contextId = `folder:${cmd.filePath}`;
+            const successResults = fileResults.filter(r => !r.failed && r.sha256);
+            const manifestFiles = {};
+            for (const r of successResults) {
+              if (r.source) {
+                manifestFiles[r.source] = buildManifestEntry(r.source, r.sha256, r.markdown ? r.markdown.length : 0);
+              }
+            }
+            writeFileManifest(sessionCwd, contextId, { files: manifestFiles });
+          } catch (_) {}
+        }
+      }
+    }
 
     // Global budget flag: if any command has a budget, use allocateMultiFileBudget
     const globalBudget = commands.find(c => c.budget);
@@ -334,10 +540,13 @@ function main() {
     applyTotalBudget(results);
 
     const summaries = results.map(r => buildSummary(r, sessionCwd));
+    if (folderWarnings.length > 0) {
+      summaries.push(...folderWarnings);
+    }
     const contextParts = results
       .filter(r => r.markdown)
       .map(r => {
-        if (r.viaClaude === 'image') {
+        if (r.viaClaude) {
           return `## Content of ${r.filename}\n\n${r.markdown.trim()}`;
         }
         return `## Content of ${r.filename}\n\n${buildInjectionContent(r, engineVersion)}`;

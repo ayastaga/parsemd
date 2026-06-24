@@ -17,6 +17,10 @@ Display this reference card. One-shot — output only, do not persist anything.
 | `/parsemd-save <file>` | Convert → inject + save `.md` to current directory |
 | `/parsemd-summarize <file>` | Convert → Claude compacts maximally (no budget) |
 | `/parsemd-diff <file1> ... <file2>` | Convert two docs → Claude compares with citations |
+| `/parsemd-folder <dir>` | Convert all supported files in a directory |
+| `/parsemd-pack <dir> --name <n>` | Create a knowledge pack bundle |
+| `/parsemd-pack <name>` | Load a previously created pack |
+| `/parsemd-relevant <file>` | Extract only query-relevant sections (TF-IDF scoring) |
 | `/parsemd-help` | This card |
 
 > **Plugin install** (namespaced): prefix with `/parsemd:` (e.g., `/parsemd:parsemd`)
@@ -40,6 +44,11 @@ Display this reference card. One-shot — output only, do not persist anything.
 |------|--------|
 | `--no-cache` | Skip session cache for this call |
 | `--output <path>` | Save converted markdown to custom path |
+| `--depth N` | Max directory recursion depth (folder mode) |
+| `--include *.pdf` | Include glob filter (folder mode) |
+| `--exclude draft_*` | Exclude glob filter (folder mode) |
+| `--name <pack>` | Knowledge pack name (pack mode) |
+| `--query "text"` | Explicit query for semantic extraction (relevant mode) |
 
 ## Path Formats
 
@@ -57,7 +66,7 @@ Display this reference card. One-shot — output only, do not persist anything.
 | Documents | `.docx` `.pdf` `.pptx` `.ppt` `.xlsx` `.xls` `.epub` |
 | Archives | `.zip` |
 | Images | `.jpg` `.jpeg` `.png` `.gif` `.bmp` `.tiff` (via Claude vision) |
-| Audio | `.wav` `.mp3` `.m4a` (requires markitdown LLM client) |
+| Audio | `.wav` `.mp3` `.m4a` (routed to Claude — may require external transcription) |
 | Web / Data | `.html` `.csv` `.json` |
 
 Text files (`.txt`, `.md`, `.py`, etc.) — use `@` directly.
@@ -77,6 +86,10 @@ Text files (`.txt`, `.md`, `.py`, etc.) — use `@` directly.
 /parsemd report.pdf --head 500 --tail 200
 /parsemd-summarize report.pdf
 /parsemd-diff old.docx /parsemd-diff new.docx
+/parsemd-folder ~/docs/ --depth 1 --include *.pdf
+/parsemd-pack ~/docs/ --name onboarding
+/parsemd-pack onboarding
+what are the risk factors? /parsemd-relevant report.pdf
 ```
 
 Docs: https://github.com/ayastaga/parsemd

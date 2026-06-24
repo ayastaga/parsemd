@@ -382,8 +382,9 @@ parsemd's trajectory: from file converter → context engineering layer. Each ph
 
 - **1.1 (done)** — sandboxed parser, categorized errors, 5-min timeout, on-disk session cache with 24h GC, tightened matcher (skips code blocks), `--no-cache` flag, total-context budget, image routing through in-session Claude.
 - **1.2 (done)** — `[parsemd]` provenance header on every injection, page/slide/sheet anchors (`<!-- page:N -->` etc.), HTTP(S) URL input, opt-in project-local cache at `<cwd>/.parsemd/cache/` (SHA256-keyed, auto-`.gitignore`), first-heading preview in summary line, engine version detect, engine seam (`markitdown` default).
-- **1.3 (current)** — slicing (`--pages`, `--section`, `--heading`, `--sheet`, `--head`, `--tail`), token budgeting (`--budget 20k`), `/parsemd-summarize` (Claude compacts maximally), `/parsemd-diff` (Claude compares two docs with citations).
-- **1.4 (planned)** — folder ingestion (`/parsemd-folder`), knowledge packs (`/parsemd-pack`), incremental updates, semantic extraction via in-session Claude (`/parsemd-relevant`), audio routing through in-session Claude, hybrid pixel fallback for visually complex pages (charts, scanned PDFs).
+- **1.3 (done)** — slicing (`--pages`, `--section`, `--heading`, `--sheet`, `--head`, `--tail`), token budgeting (`--budget 20k`), `/parsemd-summarize` (Claude compacts maximally), `/parsemd-diff` (Claude compares two docs with citations).
+- **1.4 (current)** — folder ingestion (`/parsemd-folder`), knowledge packs (`/parsemd-pack`), incremental updates (manifest-based change detection), semantic extraction via TF-IDF scoring (`/parsemd-relevant`), audio routing through in-session Claude, hybrid pixel fallback for visually complex pages (charts, scanned PDFs — requires `poppler-utils`).
+- **1.5 (planned)** — embedding-based semantic retrieval, multi-document knowledge graphs, streaming ingestion for large corpora, visual diff for slide decks.
 
 ---
 
